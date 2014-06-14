@@ -12,7 +12,7 @@ description:         Time-flies is a push-based signal-function FRP library.
                      a generalized arrow.
                      
 homepage:            eamsden.github.com/pushbasedFRP
--- license:             
+license:             BSD3
 license-file:        LICENSE
 author:              Edward Amsden
 maintainer:          edwardamsden@gmail.com

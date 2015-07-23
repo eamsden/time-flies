@@ -1,4 +1,4 @@
-{-# LANGUAGE KindSignatures, EmptyDataDecls, GADTs, ScopedTypeVariables, NoMonomorphismRestriction, GeneralizedNewtypeDeriving, TypeOperators, TupleSections #-}
+{-# LANGUAGE KindSignatures, EmptyDataDecls, GADTs, DataKinds, PolyKinds, ScopedTypeVariables, NoMonomorphismRestriction, GeneralizedNewtypeDeriving, TypeOperators, TupleSections #-}
 
 -- | Signal functions are stateful, reactive, and time-dependent entities
 -- which respond to inputs by producing outputs. Signal functions are typed
@@ -20,17 +20,13 @@
 -- while (in that context) /signal function/ will refer to the signal function
 -- produced by a combinator.
 
-module FRP.TimeFlies.SignalFunctions (
+module FRP.TimeFlies (
   -- * Datatypes
-  SF,
-  NonInitialized,
-  Initialized,
+  SF(),
+  Initialization(..),
   (:~>),
   (:^:),
-  SVEmpty,
-  SVSignal,
-  SVEvent,
-  SVAppend,
+  SV(..),
   -- * Basic signal functions
   identity,
   constant,
@@ -97,32 +93,9 @@ import Data.List (sortBy)
 import Data.Maybe
 import qualified Data.Tuple as T
 
-import FRP.TimeFlies.SignalVectors
+import FRP.TimeFlies.Types
 
 import Prelude hiding (filter)
-
--- | Signal function running or suspended
-data Initialized
-
--- | Signal function not yet running
-data NonInitialized
-
--- | Signal functions: The first type parameter distinguishes between
--- uninitialized (just specificied) and initialized (ready to respond to input
--- and time) signal functions. The second and third type parameters
--- are the input and output signal vectors, respectively. 
-data SF init svIn svOut where
-  SF     :: (SVSample svIn -> (SVSample svOut, SF Initialized svIn svOut)) 
-            -> SF NonInitialized svIn svOut
-  SFInit :: (Double -> SVDelta svIn -> (SVDelta svOut, [SVOccurrence svOut], SF Initialized svIn svOut)) 
-            -> (SVOccurrence svIn -> ([SVOccurrence svOut], SF Initialized svIn svOut)) 
-            -> SF Initialized svIn svOut
-
--- | Infix type alias for signal functions
-type svIn :~> svOut = SF NonInitialized svIn svOut
-
--- | Infix type alias for signal vectors
-type svLeft :^: svRight = SVAppend svLeft svRight
 
 -- Utility functions
 -- | Apply a signal function to a list of changes, producing a list of
@@ -479,19 +452,6 @@ delayInit eventsBuffer delayTime time = SFInit (\dt _ -> let newTime = time + dt
                                                                   Left occLeft -> delayInit (sortBy (\(x,_ ) (y, _) -> compare x y) $ eventsBuffer ++ [(time + delayTime, occLeft)]) delayTime time
                                                                   Right occRight -> delayInit eventsBuffer (fromOccurrence occRight) time))
                                                             
-
--- | Class of values integrateable with respect to time
-class TimeIntegrate i where
-  iZero :: i
-  iTimesDouble :: i -> Double -> i
-  iPlus :: i -> i -> i
-  iDifference :: i -> i -> i
-
-instance TimeIntegrate Double where
-  iZero = 0
-  iTimesDouble = (*)
-  iPlus = (+)
-  iDifference = (-)
 
 
 -- | Produce as output the rectangle rule integration of 

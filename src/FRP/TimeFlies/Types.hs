@@ -1,9 +1,9 @@
-{-# LANGUAGE KindSignatures, EmptyDataDecls, GADTs, TypeFamilies #-}
+{-# LANGUAGE KindSignatures, EmptyDataDecls, GADTs, TypeFamilies, DataKinds, PolyKinds, TypeOperators #-}
 -- | This module defines /signal vectors/, a type-level representation
 -- of the input and output structure of signal functions, and value
 -- representations typed with signal vectors for use in implementing
 -- signal functions.
-module FRP.TimeFlies.SignalVectors
+module FRP.TimeFlies.Types
   (
     -- * Type Representation of Signal Vectors
     -- | A signal vector is a type which describes
@@ -12,7 +12,16 @@ module FRP.TimeFlies.SignalVectors
     -- but by representing signal functions and other implementation
     -- types using GADTs, we can include signal vectors in the types
     -- of signal functions and their implementations.
-    SVEmpty(), SVSignal(), SVEvent(), SVAppend(),
+    SV(..),
+    
+    -- * Signal functions
+    -- | A signal function is the basic unit of reactivity. It transforms
+    -- input signals and events into output signals and events. Signal
+    -- functions 
+    SF(..),
+    Initialization(..),
+    (:~>),
+    (:^:),
 
     -- * Representations of Signal Vectors
     -- | Signal vectors abstract away from the representation,
@@ -46,17 +55,44 @@ module FRP.TimeFlies.SignalVectors
     -- * Types for describing evaluation inputs
     -- | These types are used to describe the inputs to a signal function
     -- within the evaluation interface.
-    SVRoutable(..), SVEventInput(), svOcc, inputToOccurrence, SVSignalUpdate(), svSig, updateDelta
+    SVRoutable(..), SVEventInput(), svOcc, inputToOccurrence, SVSignalUpdate(), svSig, updateDelta,
+    
+
+    -- * Integratable values
+    TimeIntegrate(..)
 ) where
 
--- | Empty signal vector type
-data SVEmpty
--- | Singleton signal signal vector type
-data SVSignal a
--- | Singleton event signal vector type
-data SVEvent a
--- | Combine two signal vector types
-data SVAppend svLeft svRight
+-- | Initialization state lifted kind
+data Initialization
+  = Initialized -- ^ Signal function running or suspended
+  | NonInitialized -- ^ Signal function not yet running
+
+
+-- | The (lifted) kind of signal vectors
+data SV a
+  = SVEmpty -- ^ Empty signal vector
+  | SVSignal a -- ^ Singleton signal signal vector type
+  | SVEvent a -- ^ Singleton event signal vector type
+  | SVAppend (SV a) (SV a) -- ^ Combine two signal vector types
+
+-- | Signal functions: The first type parameter distinguishes between
+-- uninitialized (just specificied) and initialized (ready to respond to input
+-- and time) signal functions. The second and third type parameters
+-- are the input and output signal vectors, respectively. 
+data SF (init :: Initialization) (svIn :: SV *) (svOut :: SV *) where
+  SF     :: (SVSample svIn -> (SVSample svOut, SF Initialized svIn svOut)) 
+            -> SF NonInitialized svIn svOut
+  SFInit :: (Double -> SVDelta svIn -> (SVDelta svOut, [SVOccurrence svOut], SF Initialized svIn svOut)) 
+            -> (SVOccurrence svIn -> ([SVOccurrence svOut], SF Initialized svIn svOut)) 
+            -> SF Initialized svIn svOut
+
+-- | Infix type alias for signal functions
+type svIn :~> svOut = SF NonInitialized svIn svOut
+
+-- | Infix type alias for signal vectors
+type svLeft :^: svRight = SVAppend svLeft svRight
+
+
 
 -- | Event representation
 data SVOccurrence sv where
@@ -98,7 +134,7 @@ chooseOccurrence (SVOccLeft occLeft) = Left occLeft
 chooseOccurrence (SVOccRight occRight) = Right occRight
 
 -- | Full signal sample representation
-data SVSample sv where
+data SVSample (sv :: SV *) where
   SVSample      :: a -> SVSample (SVSignal a)
   SVSampleEvent :: SVSample (SVEvent a)
   SVSampleEmpty :: SVSample SVEmpty
@@ -136,7 +172,7 @@ sampleDelta (SVSample x) = SVDeltaSignal x
 sampleDelta (SVSampleBoth sampleLeft sampleRight) = combineDeltas (sampleDelta sampleLeft) (sampleDelta sampleRight)
 
 -- | Signal delta representation
-data SVDelta sv where
+data SVDelta (sv :: SV *) where
   SVDeltaSignal  :: a -> SVDelta (SVSignal a)
   SVDeltaNothing :: SVDelta sv
   SVDeltaBoth    :: SVDelta svLeft -> SVDelta svRight -> SVDelta (SVAppend svLeft svRight)
@@ -206,12 +242,12 @@ applyHandlerDelta (SVHandlerSignal f) (SVDeltaSignal x) = [f x]
 applyHandlerDelta (SVHandlerBoth handlerLeft handlerRight) (SVDeltaBoth signalLeft signalRight) = applyHandlerDelta handlerLeft signalLeft ++ applyHandlerDelta handlerRight signalRight
 
 -- | Inputs which may be sent left or right
-class SVRoutable (r :: * -> *) where
+class SVRoutable (r :: SV * -> *) where
   svLeft  :: r svLeft -> r (SVAppend svLeft svRight)
   svRight :: r svRight -> r (SVAppend svLeft svRight)
 
 -- | An event input
-data SVEventInput sv where
+data SVEventInput (sv :: SV *) where
   SVEOcc   :: a -> SVEventInput (SVEvent a)
   SVELeft  :: SVEventInput svLeft -> SVEventInput (SVAppend svLeft svRight)
   SVERight :: SVEventInput svRight -> SVEventInput (SVAppend svLeft svRight)
@@ -231,7 +267,7 @@ inputToOccurrence (SVELeft inp) = SVOccLeft (inputToOccurrence inp)
 inputToOccurrence (SVERight inp) = SVOccRight (inputToOccurrence inp)
 
 -- | A signal update
-data SVSignalUpdate sv where
+data SVSignalUpdate (sv :: SV *) where
   SVUSig   :: a -> SVSignalUpdate (SVSignal a)
   SVULeft  :: SVSignalUpdate svLeft -> SVSignalUpdate (SVAppend svLeft svRight)
   SVURight :: SVSignalUpdate svRight -> SVSignalUpdate (SVAppend svLeft svRight)
@@ -251,4 +287,19 @@ updateDelta (SVDeltaBoth deltaLeft deltaRight) (SVULeft update) = SVDeltaBoth (u
 updateDelta (SVDeltaBoth deltaLeft deltaRight) (SVURight update) = SVDeltaBoth deltaLeft (updateDelta deltaRight update)
 updateDelta SVDeltaNothing (SVULeft update) = SVDeltaBoth (updateDelta SVDeltaNothing update) SVDeltaNothing
 updateDelta SVDeltaNothing (SVURight update) = SVDeltaBoth SVDeltaNothing (updateDelta SVDeltaNothing update)
+
+
+-- | Class of values integrateable with respect to time
+class TimeIntegrate i where
+  iZero :: i
+  iTimesDouble :: i -> Double -> i
+  iPlus :: i -> i -> i
+  iDifference :: i -> i -> i
+
+instance TimeIntegrate Double where
+  iZero = 0
+  iTimesDouble = (*)
+  iPlus = (+)
+  iDifference = (-)
+
 
